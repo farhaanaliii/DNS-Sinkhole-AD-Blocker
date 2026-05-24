@@ -1,30 +1,38 @@
 #!/bin/bash
 
-# Moto G5 Kernel-Direct Battery Monitor
-# Reads raw values straight from the Power Supply Management IC (PMIC)
-
-CAPACITY_FILE="/sys/class/power_supply/battery/capacity"
+CAPACITY_FILE="/sys/class/power_supply/bms/capacity"
 STATUS_FILE="/sys/class/power_supply/battery/status"
-LOG_FILE="$HOME/battery_status.log"
+TEMP_FILE="/sys/class/power_supply/battery/temp"
+CONTROL_FILE="/sys/class/power_supply/battery/charging_enabled"
 
-# Fallback path checking if your specific kernel structure varies
-if [ ! -f "$CAPACITY_FILE" ]; then
-    CAPACITY_FILE="/sys/class/power_supply/battery0/capacity"
-    STATUS_FILE="/sys/class/power_supply/battery0/status"
-fi
+while true; do
+    # Read raw data
+    BATT_LEVEL=$(sudo cat "$CAPACITY_FILE")
+    BATT_STATUS=$(sudo cat "$STATUS_FILE")
+    RAW_TEMP=$(sudo cat "$TEMP_FILE")
+    BATT_TEMP=$((RAW_TEMP / 10))
+    
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
-# Ensure files exist before reading
-if [ -f "$CAPACITY_FILE" ]; then
-    BATT_LEVEL=$(cat "$CAPACITY_FILE")
-    BATT_STATUS=$(cat "$STATUS_FILE")
-    
-    # Log the status with a clean timestamp
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Level: ${BATT_LEVEL}%, Status: ${BATT_STATUS}" >> "$LOG_FILE"
-    
-    # Simple alert trigger if battery drifts dangerously high for a 24/7 server
-    if [ "$BATT_LEVEL" -gt 85 ] && [ "$BATT_STATUS" = "Charging" ]; then
-        echo "[WARNING] Battery high (${BATT_LEVEL}%). Ensure hardware limiter or smart plug is active." >> "$LOG_FILE"
+    # Charging Control logic execution
+    if [ -f "$CONTROL_FILE" ]; then
+        if [ "$BATT_LEVEL" -ge 80 ] && [ "$BATT_STATUS" = "Charging" ]; then
+            echo "0" | sudo tee "$CONTROL_FILE" > /dev/null
+            ACTION=", Action: Cut Off Power"
+        elif [ "$BATT_LEVEL" -le 40 ] && [ "$BATT_STATUS" = "Discharging" ]; then
+            echo "1" | sudo tee "$CONTROL_FILE" > /dev/null
+            ACTION=", Action: Enable Power"
+        else
+            ACTION=", Action: Monitoring"
+        fi
+    else
+        ACTION=", Action: Static Node"
     fi
-else
-    echo "[ERROR] Kernel battery files could not be located." >> "$LOG_FILE"
-fi
+
+    # Append to the log file
+    echo "[$TIMESTAMP] Level: ${BATT_LEVEL}%, Status: ${BATT_STATUS}, Temp: ${BATT_TEMP}°C$ACTION" 
+
+    # Wait for 60 seconds before repeating the process
+    sleep 600
+done
+
